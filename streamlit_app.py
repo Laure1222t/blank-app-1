@@ -4,6 +4,7 @@ import difflib
 import os
 from io import BytesIO
 import tempfile
+import pandas as pd  # 移到顶部统一导入
 
 # 设置页面配置
 st.set_page_config(
@@ -17,15 +18,28 @@ st.title("📄 PDF解析与对比分析工具")
 
 # 辅助函数：从PDF中提取文本
 def extract_text_from_pdf(pdf_file):
-    """从上传的PDF文件中提取文本内容"""
+    """从上传的PDF文件中提取文本内容，优化了大文件处理"""
     try:
-        pdf_reader = PyPDF2.PdfReader(pdf_file)
-        text = ""
-        for page in pdf_reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text
-        return text
+        # 处理大文件时使用临时文件
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(pdf_file.getvalue())
+            tmp_file_path = tmp_file.name
+        
+        # 从临时文件读取PDF内容
+        with open(tmp_file_path, 'rb') as f:
+            pdf_reader = PyPDF2.PdfReader(f)
+            text = []
+            # 分页提取并处理，减少内存占用
+            for page_num, page in enumerate(pdf_reader.pages, 1):
+                with st.spinner(f"正在提取第 {page_num}/{len(pdf_reader.pages)} 页..."):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text.append(page_text)
+        
+        # 清理临时文件
+        os.unlink(tmp_file_path)
+        return "\n".join(text)
+        
     except Exception as e:
         st.error(f"提取PDF文本时出错: {str(e)}")
         return None
@@ -69,11 +83,19 @@ def compare_multiple_files(files_dict):
     
     st.subheader("多文件相似度矩阵")
     
+    # 创建进度条
+    progress_bar = st.progress(0)
+    total_steps = len(texts) * len(texts)
+    current_step = 0
+    
     # 创建相似度矩阵
     similarity_matrix = []
     for i in range(len(texts)):
         row = []
         for j in range(len(texts)):
+            current_step += 1
+            progress_bar.progress(current_step / total_steps)
+            
             if i == j:
                 row.append(1.0)  # 自身相似度为1
             else:
@@ -83,10 +105,11 @@ def compare_multiple_files(files_dict):
                 row.append(round(ratio, 4))
         similarity_matrix.append(row)
     
+    progress_bar.empty()  # 完成后清空进度条
+    
     # 显示相似度矩阵
-    import pandas as pd
     df = pd.DataFrame(similarity_matrix, index=filenames, columns=filenames)
-    st.dataframe(df.style.background_gradient(cmap="Greens"))
+    st.dataframe(df.style.background_gradient(cmap="Greens"), use_container_width=True)
     
     # 找出最相似的文件对
     max_sim = -1
@@ -111,16 +134,16 @@ def compare_multiple_files(files_dict):
 
 # 主功能区
 def main():
+    # 初始化会话状态
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = {}
+    
     # 侧边栏 - 功能选择
     st.sidebar.header("功能选择")
     function_choice = st.sidebar.radio(
         "请选择要执行的操作",
         ("PDF解析", "单文件对比", "多文件对比分析")
     )
-    
-    # 存储上传的文件及其内容
-    if 'uploaded_files' not in st.session_state:
-        st.session_state.uploaded_files = {}
     
     # PDF解析功能
     if function_choice == "PDF解析":
@@ -218,8 +241,9 @@ def main():
             
             if st.button("清除已处理文件"):
                 st.session_state.uploaded_files = {}
-                st.experimental_rerun()
+                st.rerun()  # 使用新的rerun方法
 
 # 运行主函数
 if __name__ == "__main__":
     main()
+    
