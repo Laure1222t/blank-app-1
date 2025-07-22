@@ -1,6 +1,5 @@
 streamlit
 PyPDF2
-pdfplumber
-pytesseract
-Pillow
-numpy
+python-docx
+pdf2docx
+difflib
