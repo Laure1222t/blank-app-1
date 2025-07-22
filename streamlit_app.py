@@ -28,7 +28,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Qwen大模型API调用函数，优化中文提示
-def call_qwen_api(prompt, api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"):
+def call_qwen_api(prompt, api_key, endpoint="POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"):
     """调用Qwen大模型API，优化中文处理"""
     try:
         headers = {
