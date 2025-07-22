@@ -3,12 +3,12 @@ from PyPDF2 import PdfReader
 from difflib import SequenceMatcher
 import base64
 import re
-import json
-import requests  # 用于调用Qwen API
+import requests
+import jieba  # 用于中文分词，提高匹配精度
 
 # 设置页面标题和图标
 st.set_page_config(
-    page_title="Qwen PDF条款合规性分析工具",
+    page_title="Qwen 中文PDF条款合规性分析工具",
     page_icon="📄",
     layout="wide"
 )
@@ -27,9 +27,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Qwen大模型API调用函数
-def call_qwen_api(prompt, api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"):
-    """调用Qwen大模型API"""
+# Qwen大模型API调用函数，优化中文提示
+def call_qwen_api(prompt, api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"):
+    """调用Qwen大模型API，优化中文处理"""
     try:
         headers = {
             "Content-Type": "application/json",
@@ -37,62 +37,80 @@ def call_qwen_api(prompt, api_key, base_url="https://dashscope.aliyuncs.com/comp
         }
         
         data = {
-            "model": "qwen-plus",  # 可以根据需要更换为其他Qwen模型
+            "model": "qwen-plus",  # Qwen模型对中文有良好支持
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,  # 降低随机性，使结果更稳定
-            "max_tokens": 1024
+            "temperature": 0.3,
+            "max_tokens": 1500  # 增加token限制，适应中文长文本
         }
         
-        response = requests.post(base_url, headers=headers, json=data, timeout=30)
-        response.raise_for_status()  # 抛出HTTP错误
+        response = requests.post(base_url, headers=headers, json=data, timeout=60)
+        response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     except Exception as e:
         st.error(f"调用Qwen API失败: {str(e)}")
         return None
 
 def extract_text_from_pdf(file):
-    """从PDF提取文本"""
+    """从PDF提取文本，优化中文处理"""
     try:
         pdf_reader = PdfReader(file)
         text = ""
         for page in pdf_reader.pages:
-            text += page.extract_text() or ""
+            page_text = page.extract_text() or ""
+            # 处理中文空格和换行问题
+            page_text = page_text.replace("  ", "").replace("\n", "").replace("\r", "")
+            text += page_text
         return text
     except Exception as e:
         st.error(f"提取文本失败: {str(e)}")
         return ""
 
 def split_into_clauses(text):
-    """将文本分割为条款"""
+    """将文本分割为条款，增强中文条款识别"""
+    # 增强中文条款模式识别
     patterns = [
-        r'(\d+\.\s+.*?)(?=\d+\.\s+|$)',  # 1. 2. 3. 格式
+        # 中文条款常见格式
+        r'(第[一二三四五六七八九十百]+条\s+.*?)(?=第[一二三四五六七八九十百]+条\s+|$)',  # 第一条、第二条格式
         r'([一二三四五六七八九十]+、\s+.*?)(?=[一二三四五六七八九十]+、\s+|$)',  # 一、二、三、格式
-        r'((?:第)?[一二三四五六七八九十]+条\s+.*?)(?=(?:第)?[一二三四五六七八九十]+条\s+|$)',  # 第一条 格式
-        r'(\([1-9]+\)\s+.*?)(?=\([1-9]+\)\s+|$)'  # (1) (2) (3) 格式
+        r'(\d+\.\s+.*?)(?=\d+\.\s+|$)',  # 1. 2. 3. 格式
+        r'(\([一二三四五六七八九十]+\)\s+.*?)(?=\([一二三四五六七八九十]+\)\s+|$)',  # (一) (二) 格式
+        r'(\([1-9]+\)\s+.*?)(?=\([1-9]+\)\s+|$)',  # (1) (2) 格式
+        r'(【[^\】]+】\s+.*?)(?=【[^\】]+】\s+|$)'  # 【标题】格式
     ]
     
     for pattern in patterns:
         clauses = re.findall(pattern, text, re.DOTALL)
-        if len(clauses) > 3:
+        if len(clauses) > 3:  # 确保找到足够多的条款
             return [clause.strip() for clause in clauses if clause.strip()]
     
-    # 按段落分割
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    # 按中文标点分割段落
+    paragraphs = re.split(r'[。；！？]\s*', text)
+    paragraphs = [p.strip() for p in paragraphs if p.strip() and len(p) > 10]  # 过滤过短内容
     return paragraphs
 
+def chinese_text_similarity(text1, text2):
+    """计算中文文本相似度，使用分词后匹配"""
+    # 使用jieba进行中文分词
+    words1 = list(jieba.cut(text1))
+    words2 = list(jieba.cut(text2))
+    
+    # 计算分词后的相似度
+    return SequenceMatcher(None, words1, words2).ratio()
+
 def match_clauses(clauses1, clauses2):
-    """匹配两个文档中的相似条款"""
+    """匹配两个文档中的相似条款，优化中文匹配"""
     matched_pairs = []
     used_indices = set()
     
     for i, clause1 in enumerate(clauses1):
         best_match = None
-        best_ratio = 0.3
+        best_ratio = 0.25  # 降低中文匹配阈值
         best_j = -1
         
         for j, clause2 in enumerate(clauses2):
             if j not in used_indices:
-                ratio = SequenceMatcher(None, clause1, clause2).ratio()
+                # 使用中文优化的相似度计算
+                ratio = chinese_text_similarity(clause1, clause2)
                 if ratio > best_ratio:
                     best_ratio = ratio
                     best_match = clause2
@@ -114,26 +132,28 @@ def create_download_link(content, filename, text):
     return f'<a href="data:file/txt;base64,{b64}" download="{filename}">{text}</a>'
 
 def analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key):
-    """使用Qwen大模型分析条款合规性"""
+    """使用Qwen大模型分析条款合规性，优化中文提示词"""
     if not api_key:
         st.error("请先设置Qwen API密钥")
         return None
     
+    # 优化中文提示词，更符合中文条款分析场景
     prompt = f"""
-    请分析以下两个条款的合规性，判断它们是否存在冲突：
+    请仔细分析以下两个中文条款的合规性，判断它们是否存在冲突：
     
     {filename1} 条款：{clause1}
     
     {filename2} 条款：{clause2}
     
-    请按照以下结构进行分析：
+    请按照以下结构用中文进行详细分析：
     1. 相似度评估：评估两个条款的相似程度（高/中/低）
-    2. 差异点分析：指出两个条款的主要差异
+    2. 差异点分析：详细指出两个条款在表述、范围、要求等方面的主要差异
     3. 合规性判断：判断是否存在冲突（无冲突/轻微冲突/严重冲突）
-    4. 冲突原因：如果存在冲突，请说明冲突的具体原因
-    5. 建议：针对发现的问题，给出处理建议
+    4. 冲突原因：如果存在冲突，请具体说明冲突的原因和可能带来的影响
+    5. 建议：针对发现的问题，给出专业的处理建议
     
-    请用中文详细回答，确保分析专业、准确。
+    分析时请特别注意中文法律/合同条款中常用表述的细微差别，
+    如"应当"与"必须"、"不得"与"禁止"、"可以"与"有权"等词语的区别。
     """
     
     return call_qwen_api(prompt, api_key)
@@ -144,12 +164,12 @@ def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
         return None
     
     prompt = f"""
-    请分析以下条款的内容：
+    请分析以下中文条款的内容：
     
     {doc_name} 中的条款：{clause}
     
-    请评估该条款的主要内容、潜在影响和可能存在的问题，
-    并给出简要分析和建议。
+    请用中文评估该条款的主要内容、核心要求、潜在影响和可能存在的问题，
+    并给出简要分析和建议。分析时请注意中文表述的准确性和专业性。
     """
     
     return call_qwen_api(prompt, api_key)
@@ -157,14 +177,14 @@ def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
 def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
     """显示合规性分析结果"""
     # 分割条款
-    with st.spinner("正在分析条款结构..."):
+    with st.spinner("正在分析中文条款结构..."):
         clauses1 = split_into_clauses(text1)
         clauses2 = split_into_clauses(text2)
         
         st.success(f"条款分析完成: {filename1} 识别出 {len(clauses1)} 条条款，{filename2} 识别出 {len(clauses2)} 条条款")
     
     # 匹配条款
-    with st.spinner("正在匹配条款..."):
+    with st.spinner("正在匹配相似条款..."):
         matched_pairs, unmatched1, unmatched2 = match_clauses(clauses1, clauses2)
     
     # 显示总体统计
@@ -188,7 +208,7 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
         with col_b:
             st.markdown(f'<div class="clause-box"><strong>{filename2} 条款:</strong><br>{clause2}</div>', unsafe_allow_html=True)
         
-        with st.spinner("正在调用Qwen大模型进行合规性分析..."):
+        with st.spinner("正在调用Qwen大模型进行中文合规性分析..."):
             analysis = analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key)
         
         if analysis:
@@ -225,8 +245,8 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
             st.divider()
 
 # 应用主界面
-st.title("📄 Qwen PDF条款合规性分析工具")
-st.markdown("基于阿里云Qwen大模型的智能条款合规性分析")
+st.title("📄 Qwen 中文PDF条款合规性分析工具")
+st.markdown("专为中文文档优化的智能条款合规性分析系统")
 
 # Qwen API设置
 with st.sidebar:
@@ -234,7 +254,7 @@ with st.sidebar:
     qwen_api_key = st.text_input("请输入Qwen API密钥", type="password")
     st.markdown("""
     提示：API密钥可以从阿里云DashScope控制台获取。
-    若无API密钥，可先在左侧输入框中填写以使用工具。
+    Qwen模型对中文有极佳的理解能力，特别适合中文条款分析。
     """)
 
 with st.form("upload_form"):
@@ -255,7 +275,7 @@ if submitted and file1 and file2:
         text2 = extract_text_from_pdf(file2)
         
         if not text1 or not text2:
-            st.error("无法提取文本内容，请确认PDF包含可提取的文本")
+            st.error("无法提取文本内容，请确认PDF包含可提取的中文文本")
         else:
             show_compliance_analysis(text1, text2, file1.name, file2.name, qwen_api_key)
 else:
@@ -265,16 +285,16 @@ else:
 with st.expander("使用说明"):
     st.markdown("""
     1. 在左侧栏输入您的Qwen API密钥
-    2. 上传两个需要对比的PDF文件（建议先上传基准文档）
+    2. 上传两个需要对比的中文PDF文件（建议先上传基准文档）
     3. 点击"开始合规性分析"按钮
-    4. 系统会自动识别条款并调用Qwen大模型进行专业分析
+    4. 系统会自动识别中文条款并调用Qwen大模型进行专业分析
     5. 查看AI生成的合规性分析结果
     
-    工具优势：
-    - 利用Qwen大模型的理解能力，提供更专业的合规性判断
-    - 不仅指出差异，还能分析差异背后的合规性问题
-    - 对未匹配的条款也能进行独立分析
-    - 提供针对性的处理建议
+    中文优化特点：
+    - 增强中文条款格式识别（第一条、一、(一)等）
+    - 使用中文分词提高条款匹配精度
+    - 针对中文法律/合同术语优化分析逻辑
+    - 理解中文表述的细微差别（如"应当"与"必须"）
     
     注意：API调用可能会产生费用，请参考阿里云DashScope的定价标准。
     """)
@@ -291,7 +311,7 @@ st.markdown("""
 }
 </style>
 <div class="footer">
-    Qwen PDF条款合规性分析工具 | 基于阿里云Qwen大模型 | 数据不会保留在服务器
+    中文PDF条款合规性分析工具 | 基于Qwen大模型 | 优化中文文档处理
 </div>
 """, unsafe_allow_html=True)
     
