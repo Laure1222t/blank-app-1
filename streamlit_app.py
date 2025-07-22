@@ -27,25 +27,55 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Qwen大模型API调用函数，优化中文提示
-def call_qwen_api(prompt, api_key, endpoint="POST https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"):
-    """调用Qwen大模型API，优化中文处理"""
+# 配置Qwen API参数 - 使用指定的API链接
+QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+def call_qwen_api(prompt, api_key):
+    """调用Qwen大模型API，使用指定的API链接"""
+    if not api_key:
+        st.error("Qwen API密钥未设置，请在左侧栏输入密钥")
+        return None
+        
     try:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}"
         }
         
+        # 构建符合API要求的请求数据
         data = {
-            "model": "qwen-plus",  # Qwen模型对中文有良好支持
+            "model": "qwen-plus",  # 可根据需要更换为其他Qwen模型如qwen-max
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": 1500  # 增加token限制，适应中文长文本
+            "max_tokens": 1500
         }
         
-        response = requests.post(base_url, headers=headers, json=data, timeout=60)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        # 使用指定的API链接发送POST请求
+        response = requests.post(
+            QWEN_API_URL,
+            headers=headers,
+            json=data,
+            timeout=60
+        )
+        
+        # 检查HTTP响应状态
+        if response.status_code != 200:
+            st.error(f"API请求失败，状态码: {response.status_code}，响应: {response.text}")
+            return None
+            
+        # 解析JSON响应
+        response_json = response.json()
+        
+        # 检查响应结构
+        if "choices" not in response_json or len(response_json["choices"]) == 0:
+            st.error("API返回格式不符合预期")
+            return None
+            
+        return response_json["choices"][0]["message"]["content"]
+        
+    except requests.exceptions.Timeout:
+        st.error("API请求超时，请重试")
+        return None
     except Exception as e:
         st.error(f"调用Qwen API失败: {str(e)}")
         return None
@@ -133,10 +163,6 @@ def create_download_link(content, filename, text):
 
 def analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key):
     """使用Qwen大模型分析条款合规性，优化中文提示词"""
-    if not api_key:
-        st.error("请先设置Qwen API密钥")
-        return None
-    
     # 优化中文提示词，更符合中文条款分析场景
     prompt = f"""
     请仔细分析以下两个中文条款的合规性，判断它们是否存在冲突：
@@ -160,9 +186,6 @@ def analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key
 
 def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
     """使用Qwen大模型分析独立条款（未匹配的条款）"""
-    if not api_key:
-        return None
-    
     prompt = f"""
     请分析以下中文条款的内容：
     
@@ -252,9 +275,9 @@ st.markdown("专为中文文档优化的智能条款合规性分析系统")
 with st.sidebar:
     st.subheader("Qwen API 设置")
     qwen_api_key = st.text_input("请输入Qwen API密钥", type="password")
-    st.markdown("""
+    st.markdown(f"""
     提示：API密钥可以从阿里云DashScope控制台获取。
-    Qwen模型对中文有极佳的理解能力，特别适合中文条款分析。
+    当前使用的API端点：`{QWEN_API_URL}`
     """)
 
 with st.form("upload_form"):
@@ -280,24 +303,6 @@ if submitted and file1 and file2:
             show_compliance_analysis(text1, text2, file1.name, file2.name, qwen_api_key)
 else:
     st.info('请上传两个PDF文件后点击"开始合规性分析"按钮')
-
-# 添加使用说明
-with st.expander("使用说明"):
-    st.markdown("""
-    1. 在左侧栏输入您的Qwen API密钥
-    2. 上传两个需要对比的中文PDF文件（建议先上传基准文档）
-    3. 点击"开始合规性分析"按钮
-    4. 系统会自动识别中文条款并调用Qwen大模型进行专业分析
-    5. 查看AI生成的合规性分析结果
-    
-    中文优化特点：
-    - 增强中文条款格式识别（第一条、一、(一)等）
-    - 使用中文分词提高条款匹配精度
-    - 针对中文法律/合同术语优化分析逻辑
-    - 理解中文表述的细微差别（如"应当"与"必须"）
-    
-    注意：API调用可能会产生费用，请参考阿里云DashScope的定价标准。
-    """)
 
 # 添加页脚
 st.divider()
