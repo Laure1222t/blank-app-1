@@ -99,7 +99,7 @@ if submitted and file1 and file2:
             col2.metric("文档2字数", len(text2))
             col3.metric("相似度", f"{sum(1 for a,b in zip(text1, text2) if a==b)/max(len(text1), len(text2))*100:.1f}%")
 else:
-    st.info("请上传两个PDF文件后点击"开始对比"按钮")
+    st.info('请上传两个PDF文件后点击"开始对比"按钮')
 
 # 添加使用说明
 with st.expander("使用说明"):
