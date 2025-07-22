@@ -1,249 +1,132 @@
 import streamlit as st
-import PyPDF2
-import difflib
-import os
-from io import BytesIO
-import tempfile
-import pandas as pd  # 移到顶部统一导入
+from PyPDF2 import PdfReader
+from difflib import HtmlDiff
+import base64
+import time
 
-# 设置页面配置
+# 设置页面标题和图标
 st.set_page_config(
-    page_title="PDF解析与对比分析工具",
+    page_title="在线PDF对比工具",
     page_icon="📄",
     layout="wide"
 )
 
-# 页面标题
-st.title("📄 PDF解析与对比分析工具")
+# 自定义CSS样式
+st.markdown("""
+<style>
+    .stApp { max-width: 1200px; margin: 0 auto; }
+    .stFileUploader { width: 100%; }
+    .highlight-add { background-color: #d4edda; }
+    .highlight-remove { background-color: #f8d7da; }
+    .diff-container { border: 1px solid #ddd; border-radius: 5px; padding: 15px; }
+</style>
+""", unsafe_allow_html=True)
 
-# 辅助函数：从PDF中提取文本
-def extract_text_from_pdf(pdf_file):
-    """从上传的PDF文件中提取文本内容，优化了大文件处理"""
+def extract_text_from_pdf(file):
+    """从PDF提取文本"""
     try:
-        # 处理大文件时使用临时文件
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            tmp_file.write(pdf_file.getvalue())
-            tmp_file_path = tmp_file.name
-        
-        # 从临时文件读取PDF内容
-        with open(tmp_file_path, 'rb') as f:
-            pdf_reader = PyPDF2.PdfReader(f)
-            text = []
-            # 分页提取并处理，减少内存占用
-            for page_num, page in enumerate(pdf_reader.pages, 1):
-                with st.spinner(f"正在提取第 {page_num}/{len(pdf_reader.pages)} 页..."):
-                    page_text = page.extract_text()
-                    if page_text:
-                        text.append(page_text)
-        
-        # 清理临时文件
-        os.unlink(tmp_file_path)
-        return "\n".join(text)
-        
+        pdf_reader = PdfReader(file)
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() or ""  # 处理可能为None的情况
+        return text
     except Exception as e:
-        st.error(f"提取PDF文本时出错: {str(e)}")
-        return None
+        st.error(f"提取文本失败: {str(e)}")
+        return ""
 
-# 辅助函数：比较两个文本并返回差异
-def compare_texts(text1, text2, filename1, filename2):
-    """比较两个文本并返回差异结果"""
-    if not text1 or not text2:
-        st.warning("无法比较，一个或多个文本为空")
-        return
+def create_download_link(content, filename, text):
+    """生成下载链接"""
+    b64 = base64.b64encode(content.encode()).decode()
+    return f'<a href="data:file/txt;base64,{b64}" download="{filename}">{text}</a>'
+
+def show_diff(text1, text2):
+    """显示差异对比结果"""
+    col1, col2 = st.columns(2)
     
-    # 使用difflib进行文本比较
-    d = difflib.HtmlDiff()
-    diff = d.make_file(
+    with col1:
+        st.subheader("文档1内容")
+        st.text_area("内容1", text1, height=300, label_visibility="collapsed")
+    
+    with col2:
+        st.subheader("文档2内容")
+        st.text_area("内容2", text2, height=300, label_visibility="collapsed")
+    
+    st.divider()
+    st.subheader("🔍 差异对比结果")
+    
+    # 使用HtmlDiff生成更美观的差异对比
+    html_diff = HtmlDiff().make_file(
         text1.splitlines(), 
         text2.splitlines(),
-        fromdesc=filename1,
-        todesc=filename2
+        fromdesc="文档1",
+        todesc="文档2"
     )
     
-    # 显示差异结果
-    st.subheader("文本差异比较结果")
+    # 在独立窗口中显示完整差异
+    with st.expander("查看完整差异对比", expanded=True):
+        st.components.v1.html(html_diff, height=600, scrolling=True)
+    
+    # 提供下载
+    st.markdown(create_download_link(html_diff, "diff_result.html", "⬇️ 下载对比结果(HTML)"), unsafe_allow_html=True)
+
+# 应用主界面
+st.title("📄 在线PDF文档对比工具")
+st.markdown("上传两个PDF文件，系统将自动解析并对比内容差异")
+
+with st.form("upload_form"):
+    col1, col2 = st.columns(2)
+    with col1:
+        file1 = st.file_uploader("选择第一个PDF文件", type=["pdf"])
+    with col2:
+        file2 = st.file_uploader("选择第二个PDF文件", type=["pdf"])
+    
+    submitted = st.form_submit_button("开始对比")
+
+if submitted and file1 and file2:
+    with st.spinner("正在解析PDF内容，请稍候..."):
+        text1 = extract_text_from_pdf(file1)
+        text2 = extract_text_from_pdf(file2)
+        
+        if not text1 or not text2:
+            st.error("无法提取文本内容，请确认PDF包含可提取的文本")
+        else:
+            show_diff(text1, text2)
+            
+            # 显示简单的统计信息
+            st.divider()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("文档1字数", len(text1))
+            col2.metric("文档2字数", len(text2))
+            col3.metric("相似度", f"{sum(1 for a,b in zip(text1, text2) if a==b)/max(len(text1), len(text2))*100:.1f}%")
+else:
+    st.info('请上传两个PDF文件后点击"开始对比"按钮')
+
+# 添加使用说明
+with st.expander("使用说明"):
     st.markdown("""
-    <style>
-        .diff_add { background-color: #ccffcc; }
-        .diff_del { background-color: #ffcccc; text-decoration: line-through; }
-        .diff_chg { background-color: #ffffcc; }
-    </style>
-    """, unsafe_allow_html=True)
-    st.components.v1.html(diff, height=600, scrolling=True)
+    1. 上传两个需要对比的PDF文件
+    2. 点击"开始对比"按钮
+    3. 查看文本差异对比结果
+    4. 可以下载HTML格式的对比报告
+    
+    **注意:**
+    - 仅支持文本型PDF，扫描件需要OCR处理
+    - 大文件可能需要更长的处理时间
+    - 隐私提示: 上传的文件仅用于临时处理，不会存储在服务器
+    """)
 
-# 辅助函数：多个文件间的比较
-def compare_multiple_files(files_dict):
-    """比较多个文件，生成相似度矩阵"""
-    if len(files_dict) < 2:
-        st.warning("请至少上传两个文件进行比较")
-        return
-    
-    filenames = list(files_dict.keys())
-    texts = list(files_dict.values())
-    
-    st.subheader("多文件相似度矩阵")
-    
-    # 创建进度条
-    progress_bar = st.progress(0)
-    total_steps = len(texts) * len(texts)
-    current_step = 0
-    
-    # 创建相似度矩阵
-    similarity_matrix = []
-    for i in range(len(texts)):
-        row = []
-        for j in range(len(texts)):
-            current_step += 1
-            progress_bar.progress(current_step / total_steps)
-            
-            if i == j:
-                row.append(1.0)  # 自身相似度为1
-            else:
-                # 使用SequenceMatcher计算相似度
-                matcher = difflib.SequenceMatcher(None, texts[i], texts[j])
-                ratio = matcher.ratio()
-                row.append(round(ratio, 4))
-        similarity_matrix.append(row)
-    
-    progress_bar.empty()  # 完成后清空进度条
-    
-    # 显示相似度矩阵
-    df = pd.DataFrame(similarity_matrix, index=filenames, columns=filenames)
-    st.dataframe(df.style.background_gradient(cmap="Greens"), use_container_width=True)
-    
-    # 找出最相似的文件对
-    max_sim = -1
-    max_pair = None
-    for i in range(len(filenames)):
-        for j in range(i+1, len(filenames)):
-            if similarity_matrix[i][j] > max_sim:
-                max_sim = similarity_matrix[i][j]
-                max_pair = (filenames[i], filenames[j], max_sim)
-    
-    if max_pair:
-        st.info(f"最相似的文件对: {max_pair[0]} 和 {max_pair[1]}，相似度: {max_pair[2]:.2%}")
-        
-        # 提供详细比较选项
-        if st.button("查看这两个文件的详细差异"):
-            compare_texts(
-                files_dict[max_pair[0]], 
-                files_dict[max_pair[1]],
-                max_pair[0],
-                max_pair[1]
-            )
-
-# 主功能区
-def main():
-    # 初始化会话状态
-    if 'uploaded_files' not in st.session_state:
-        st.session_state.uploaded_files = {}
-    
-    # 侧边栏 - 功能选择
-    st.sidebar.header("功能选择")
-    function_choice = st.sidebar.radio(
-        "请选择要执行的操作",
-        ("PDF解析", "单文件对比", "多文件对比分析")
-    )
-    
-    # PDF解析功能
-    if function_choice == "PDF解析":
-        st.header("PDF解析")
-        st.write("上传PDF文件，提取并查看其文本内容")
-        
-        uploaded_file = st.file_uploader("选择PDF文件", type="pdf", key="pdf_parser")
-        
-        if uploaded_file is not None:
-            # 保存到会话状态
-            filename = uploaded_file.name
-            if filename not in st.session_state.uploaded_files:
-                text = extract_text_from_pdf(uploaded_file)
-                if text:
-                    st.session_state.uploaded_files[filename] = text
-            
-            # 显示文件信息
-            st.success(f"已成功解析: {filename}")
-            
-            # 显示提取的文本
-            if filename in st.session_state.uploaded_files:
-                text = st.session_state.uploaded_files[filename]
-                st.subheader("提取的文本内容")
-                
-                # 文本长度信息
-                st.info(f"文本长度: {len(text)} 字符，约 {len(text.split())} 个单词")
-                
-                # 文本显示区域
-                with st.expander("查看完整文本", expanded=True):
-                    st.text_area("", text, height=500)
-    
-    # 单文件对比功能
-    elif function_choice == "单文件对比":
-        st.header("单文件对比")
-        st.write("上传两个PDF文件，比较它们之间的文本差异")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            file1 = st.file_uploader("选择第一个PDF文件", type="pdf", key="file1")
-        
-        with col2:
-            file2 = st.file_uploader("选择第二个PDF文件", type="pdf", key="file2")
-        
-        if file1 and file2:
-            # 提取文本
-            text1 = extract_text_from_pdf(file1)
-            text2 = extract_text_from_pdf(file2)
-            
-            # 保存到会话状态
-            if file1.name not in st.session_state.uploaded_files and text1:
-                st.session_state.uploaded_files[file1.name] = text1
-            if file2.name not in st.session_state.uploaded_files and text2:
-                st.session_state.uploaded_files[file2.name] = text2
-            
-            # 显示比较结果
-            compare_texts(text1, text2, file1.name, file2.name)
-    
-    # 多文件对比分析功能
-    elif function_choice == "多文件对比分析":
-        st.header("多文件对比分析")
-        st.write("上传多个PDF文件，分析它们之间的相似度")
-        
-        uploaded_files = st.file_uploader(
-            "选择多个PDF文件", 
-            type="pdf", 
-            accept_multiple_files=True,
-            key="multi_files"
-        )
-        
-        # 显示已上传的文件
-        if uploaded_files:
-            st.success(f"已上传 {len(uploaded_files)} 个文件")
-            
-            # 提取所有文件的文本
-            files_dict = {}
-            for file in uploaded_files:
-                if file.name not in st.session_state.uploaded_files:
-                    text = extract_text_from_pdf(file)
-                    if text:
-                        st.session_state.uploaded_files[file.name] = text
-                        files_dict[file.name] = text
-                else:
-                    files_dict[file.name] = st.session_state.uploaded_files[file.name]
-            
-            # 执行多文件比较
-            compare_multiple_files(files_dict)
-    
-    # 显示已处理的文件
-    if st.session_state.uploaded_files:
-        with st.sidebar.expander("已处理的文件", expanded=False):
-            st.write(f"共 {len(st.session_state.uploaded_files)} 个文件")
-            for filename in st.session_state.uploaded_files.keys():
-                st.write(f"- {filename}")
-            
-            if st.button("清除已处理文件"):
-                st.session_state.uploaded_files = {}
-                st.rerun()  # 使用新的rerun方法
-
-# 运行主函数
-if __name__ == "__main__":
-    main()
-    
+# 添加页脚
+st.divider()
+st.markdown("""
+<style>
+.footer {
+    font-size: 0.8rem;
+    color: #666;
+    text-align: center;
+    margin-top: 2rem;
+}
+</style>
+<div class="footer">
+    PDF对比工具 | 使用Streamlit构建 | 数据不会保留在服务器
+</div>
+""", unsafe_allow_html=True)
