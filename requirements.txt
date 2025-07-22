@@ -1,7 +1,6 @@
-streamlit 
+streamlit
 PyPDF2
-difflib
-os
-BytesIO
-tempfile
-pandas
+pdfplumber
+pytesseract
+Pillow
+numpy
