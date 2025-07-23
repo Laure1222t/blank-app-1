@@ -184,18 +184,6 @@ def analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key
     
     return call_qwen_api(prompt, api_key)
 
-def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
-    """使用Qwen大模型分析独立条款（未匹配的条款）"""
-    prompt = f"""
-    请分析以下中文条款的内容：
-    
-    {doc_name} 中的条款：{clause}
-    
-    请用中文评估该条款的主要内容、核心要求、潜在影响和可能存在的问题，
-    并给出简要分析和建议。分析时请注意中文表述的准确性和专业性。
-    """
-    
-    return call_qwen_api(prompt, api_key)
 
 def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
     """显示合规性分析结果"""
@@ -239,34 +227,6 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
         
         st.divider()
     
-    # 未匹配的条款分析
-    st.subheader("未匹配条款分析")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown(f"#### {filename1} 中独有的条款 ({len(unmatched1)})")
-        for i, clause in enumerate(unmatched1):
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            
-            with st.spinner("Qwen大模型正在分析此条款..."):
-                analysis = analyze_standalone_clause_with_qwen(clause, filename1, api_key)
-            
-            if analysis:
-                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
-            st.divider()
-    
-    with col2:
-        st.markdown(f"#### {filename2} 中独有的条款 ({len(unmatched2)})")
-        for i, clause in enumerate(unmatched2):
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            
-            with st.spinner("Qwen大模型正在分析此条款..."):
-                analysis = analyze_standalone_clause_with_qwen(clause, filename2, api_key)
-            
-            if analysis:
-                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
-            st.divider()
-
 # 应用主界面
 st.title("📄 Qwen 中文PDF条款合规性分析工具")
 st.markdown("专为中文文档优化的智能条款合规性分析系统")
