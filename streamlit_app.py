@@ -24,7 +24,6 @@ st.markdown("""
     .compliance-warning { border-left: 4px solid #ffc107; }
     .compliance-conflict { border-left: 4px solid #dc3545; }
     .model-response { background-color: #f0f2f6; padding: 15px; border-radius: 5px; margin: 10px 0; }
-    .comparison-section { border: 1px solid #e6e6e6; border-radius: 8px; padding: 15px; margin-bottom: 20px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,7 +47,7 @@ def call_qwen_api(prompt, api_key):
             "model": "qwen-plus",  # 可根据需要更换为其他Qwen模型如qwen-max
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": 3000
+            "max_tokens": 1500
         }
         
         # 使用指定的API链接发送POST请求
@@ -151,7 +150,11 @@ def match_clauses(clauses1, clauses2):
             matched_pairs.append((clause1, best_match, best_ratio))
             used_indices.add(best_j)
     
-    return matched_pairs
+    unmatched1 = [clause for i, clause in enumerate(clauses1) 
+                 if i not in [idx for idx, _ in enumerate(matched_pairs)]]
+    unmatched2 = [clause for j, clause in enumerate(clauses2) if j not in used_indices]
+    
+    return matched_pairs, unmatched1, unmatched2
 
 def create_download_link(content, filename, text):
     """生成下载链接"""
@@ -181,28 +184,42 @@ def analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key
     
     return call_qwen_api(prompt, api_key)
 
-def analyze_single_comparison(base_text, compare_text, base_filename, compare_filename, api_key):
-    """分析单个基准文件与对比文件的合规性"""
-    with st.spinner(f"正在分析 {compare_filename} 的条款结构..."):
-        base_clauses = split_into_clauses(base_text)
-        compare_clauses = split_into_clauses(compare_text)
+def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
+    """使用Qwen大模型分析独立条款（未匹配的条款）"""
+    prompt = f"""
+    请分析以下中文条款的内容：
+    
+    {doc_name} 中的条款：{clause}
+    
+    请用中文评估该条款的主要内容、核心要求、潜在影响和可能存在的问题，
+    并给出简要分析和建议。分析时请注意中文表述的准确性和专业性。
+    """
+    
+    return call_qwen_api(prompt, api_key)
+
+def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
+    """显示合规性分析结果"""
+    # 分割条款
+    with st.spinner("正在分析中文条款结构..."):
+        clauses1 = split_into_clauses(text1)
+        clauses2 = split_into_clauses(text2)
         
-        st.success(f"条款分析完成: {base_filename} 识别出 {len(base_clauses)} 条条款，{compare_filename} 识别出 {len(compare_clauses)} 条条款")
+        st.success(f"条款分析完成: {filename1} 识别出 {len(clauses1)} 条条款，{filename2} 识别出 {len(clauses2)} 条条款")
     
     # 匹配条款
-    with st.spinner(f"正在匹配 {compare_filename} 与基准文件的相似条款..."):
-        matched_pairs = match_clauses(base_clauses, compare_clauses)
+    with st.spinner("正在匹配相似条款..."):
+        matched_pairs, unmatched1, unmatched2 = match_clauses(clauses1, clauses2)
     
     # 显示总体统计
     st.divider()
     col1, col2, col3 = st.columns(3)
-    col1.metric(f"{base_filename} 条款数", len(base_clauses))
-    col2.metric(f"{compare_filename} 条款数", len(compare_clauses))
+    col1.metric(f"{filename1} 条款数", len(clauses1))
+    col2.metric(f"{filename2} 条款数", len(clauses2))
     col3.metric("匹配条款数", len(matched_pairs))
     
     # 显示条款对比和合规性分析
     st.divider()
-    st.subheader(f"📊 与 {compare_filename} 的条款合规性详细分析（Qwen大模型）")
+    st.subheader("📊 条款合规性详细分析（Qwen大模型）")
     
     # 分析每个匹配对的合规性
     for i, (clause1, clause2, ratio) in enumerate(matched_pairs):
@@ -210,21 +227,49 @@ def analyze_single_comparison(base_text, compare_text, base_filename, compare_fi
         
         col_a, col_b = st.columns(2)
         with col_a:
-            st.markdown(f'<div class="clause-box"><strong>{base_filename} 条款:</strong><br>{clause1}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="clause-box"><strong>{filename1} 条款:</strong><br>{clause1}</div>', unsafe_allow_html=True)
         with col_b:
-            st.markdown(f'<div class="clause-box"><strong>{compare_filename} 条款:</strong><br>{clause2}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="clause-box"><strong>{filename2} 条款:</strong><br>{clause2}</div>', unsafe_allow_html=True)
         
         with st.spinner("正在调用Qwen大模型进行中文合规性分析..."):
-            analysis = analyze_compliance_with_qwen(clause1, clause2, base_filename, compare_filename, api_key)
+            analysis = analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key)
         
         if analysis:
             st.markdown('<div class="model-response"><strong>Qwen大模型分析结果:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
         
         st.divider()
+    
+    # 未匹配的条款分析
+    st.subheader("未匹配条款分析")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"#### {filename1} 中独有的条款 ({len(unmatched1)})")
+        for i, clause in enumerate(unmatched1):
+            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
+            
+            with st.spinner("Qwen大模型正在分析此条款..."):
+                analysis = analyze_standalone_clause_with_qwen(clause, filename1, api_key)
+            
+            if analysis:
+                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
+            st.divider()
+    
+    with col2:
+        st.markdown(f"#### {filename2} 中独有的条款 ({len(unmatched2)})")
+        for i, clause in enumerate(unmatched2):
+            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
+            
+            with st.spinner("Qwen大模型正在分析此条款..."):
+                analysis = analyze_standalone_clause_with_qwen(clause, filename2, api_key)
+            
+            if analysis:
+                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
+            st.divider()
 
 # 应用主界面
 st.title("📄 Qwen 中文PDF条款合规性分析工具")
-st.markdown("专为中文文档优化的智能条款合规性分析系统，支持一对多文件比对")
+st.markdown("专为中文文档优化的智能条款合规性分析系统")
 
 # Qwen API设置
 with st.sidebar:
@@ -236,44 +281,28 @@ with st.sidebar:
     """)
 
 with st.form("upload_form"):
-    st.subheader("文件上传区")
-    base_file = st.file_uploader("选择基准PDF文件（被比对的主文件）", type=["pdf"])
-    compare_files = st.file_uploader("选择一个或多个对比PDF文件", type=["pdf"], accept_multiple_files=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        file1 = st.file_uploader("选择第一个PDF文件（基准文档）", type=["pdf"])
+    with col2:
+        file2 = st.file_uploader("选择第二个PDF文件（对比文档）", type=["pdf"])
     
     submitted = st.form_submit_button("开始合规性分析")
 
-if submitted and base_file and compare_files:
+if submitted and file1 and file2:
     if not qwen_api_key:
         st.warning("未检测到Qwen API密钥，部分功能可能受限")
     
-    with st.spinner("正在解析基准PDF内容，请稍候..."):
-        base_text = extract_text_from_pdf(base_file)
+    with st.spinner("正在解析PDF内容，请稍候..."):
+        text1 = extract_text_from_pdf(file1)
+        text2 = extract_text_from_pdf(file2)
         
-        if not base_text:
-            st.error("无法提取基准文件的文本内容，请确认PDF包含可提取的中文文本")
+        if not text1 or not text2:
+            st.error("无法提取文本内容，请确认PDF包含可提取的中文文本")
         else:
-            # 循环处理每个对比文件
-            for i, compare_file in enumerate(compare_files, 1):
-                st.markdown(f'## 🔍 比对分析 {i}/{len(compare_files)}: {base_file.name} vs {compare_file.name}')
-                st.markdown('<div class="comparison-section">', unsafe_allow_html=True)
-                
-                with st.spinner(f"正在解析 {compare_file.name} 的内容..."):
-                    compare_text = extract_text_from_pdf(compare_file)
-                    
-                    if not compare_text:
-                        st.error(f"无法提取 {compare_file.name} 的文本内容，请确认PDF包含可提取的中文文本")
-                    else:
-                        analyze_single_comparison(base_text, compare_text, base_file.name, compare_file.name, qwen_api_key)
-                
-                st.markdown('</div>', unsafe_allow_html=True)
+            show_compliance_analysis(text1, text2, file1.name, file2.name, qwen_api_key)
 else:
-    if submitted:
-        if not base_file:
-            st.warning("请上传基准PDF文件")
-        if not compare_files:
-            st.warning("请至少上传一个对比PDF文件")
-    else:
-        st.info('请上传一个基准PDF文件和至少一个对比PDF文件，然后点击"开始合规性分析"按钮')
+    st.info('请上传两个PDF文件后点击"开始合规性分析"按钮')
 
 # 添加页脚
 st.divider()
@@ -287,6 +316,6 @@ st.markdown("""
 }
 </style>
 <div class="footer">
-    中文PDF条款合规性分析工具 | 基于Qwen大模型 | 支持一对多比对 | 优化中文文档处理
+    中文PDF条款合规性分析工具 | 基于Qwen大模型 | 优化中文文档处理
 </div>
 """, unsafe_allow_html=True)
