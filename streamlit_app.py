@@ -6,12 +6,19 @@ import re
 import requests
 import jieba  # 用于中文分词，提高匹配精度
 
-# 设置页面标题和图标
+# 确保在设置页面配置前不进行任何Streamlit操作
+# 移动页面配置到最前面（在任何其他Streamlit操作之前）
 st.set_page_config(
     page_title="Qwen 中文PDF条款合规性分析工具",
     page_icon="📄",
     layout="wide"
 )
+
+# 初始化会话状态（关键修复）
+if 'initialized' not in st.session_state:
+    st.session_state.initialized = True
+    # 可以在这里初始化其他需要的会话状态变量
+    st.session_state.api_key = ""
 
 # 自定义CSS样式
 st.markdown("""
@@ -246,76 +253,55 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
     with col1:
         st.markdown(f"#### {filename1} 中独有的条款 ({len(unmatched1)})")
         for i, clause in enumerate(unmatched1):
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            
-            with st.spinner("Qwen大模型正在分析此条款..."):
+            # 这里补充完整未匹配条款的分析代码
+            with st.spinner(f"正在分析{filename1}的独有条款 {i+1}..."):
                 analysis = analyze_standalone_clause_with_qwen(clause, filename1, api_key)
             
+            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
             if analysis:
-                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
-            st.divider()
+                st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
     
     with col2:
         st.markdown(f"#### {filename2} 中独有的条款 ({len(unmatched2)})")
         for i, clause in enumerate(unmatched2):
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            
-            with st.spinner("Qwen大模型正在分析此条款..."):
+            with st.spinner(f"正在分析{filename2}的独有条款 {i+1}..."):
                 analysis = analyze_standalone_clause_with_qwen(clause, filename2, api_key)
             
+            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
             if analysis:
-                st.markdown('<div class="model-response"><strong>Qwen分析:</strong><br>' + analysis + '</div>', unsafe_allow_html=True)
-            st.divider()
+                st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
 
-# 应用主界面
-st.title("📄 Qwen 中文PDF条款合规性分析工具")
-st.markdown("专为中文文档优化的智能条款合规性分析系统")
-
-# Qwen API设置
-with st.sidebar:
-    st.subheader("Qwen API 设置")
-    qwen_api_key = st.text_input("请输入Qwen API密钥", type="password")
-    st.markdown(f"""
-    提示：API密钥可以从阿里云DashScope控制台获取。
-    当前使用的API端点：`{QWEN_API_URL}`
-    """)
-
-with st.form("upload_form"):
+# 主程序入口（关键修复：确保所有Streamlit操作在主程序块中）
+def main():
+    st.title("Qwen 中文PDF条款合规性分析工具")
+    st.write("上传两个PDF文件，系统将自动分析条款合规性并使用Qwen大模型提供专业评估")
+    
+    # 侧边栏设置
+    with st.sidebar:
+        st.subheader("设置")
+        st.session_state.api_key = st.text_input("Qwen API 密钥", type="password", value=st.session_state.api_key)
+        st.markdown("""
+        提示：获取API密钥请访问阿里云DashScope平台
+        """)
+    
+    # 文件上传
     col1, col2 = st.columns(2)
     with col1:
-        file1 = st.file_uploader("选择第一个PDF文件（基准文档）", type=["pdf"])
+        file1 = st.file_uploader("上传第一个PDF文件", type="pdf", key="file1")
     with col2:
-        file2 = st.file_uploader("选择第二个PDF文件（对比文档）", type=["pdf"])
+        file2 = st.file_uploader("上传第二个PDF文件", type="pdf", key="file2")
     
-    submitted = st.form_submit_button("开始合规性分析")
-
-if submitted and file1 and file2:
-    if not qwen_api_key:
-        st.warning("未检测到Qwen API密钥，部分功能可能受限")
-    
-    with st.spinner("正在解析PDF内容，请稍候..."):
-        text1 = extract_text_from_pdf(file1)
-        text2 = extract_text_from_pdf(file2)
+    # 分析按钮
+    if st.button("开始合规性分析") and file1 and file2:
+        with st.spinner("正在提取PDF文本..."):
+            text1 = extract_text_from_pdf(file1)
+            text2 = extract_text_from_pdf(file2)
         
-        if not text1 or not text2:
-            st.error("无法提取文本内容，请确认PDF包含可提取的中文文本")
+        if text1 and text2:
+            show_compliance_analysis(text1, text2, file1.name, file2.name, st.session_state.api_key)
         else:
-            show_compliance_analysis(text1, text2, file1.name, file2.name, qwen_api_key)
-else:
-    st.info('请上传两个PDF文件后点击"开始合规性分析"按钮')
+            st.error("无法从PDF中提取文本，请检查文件是否有效")
 
-# 添加页脚
-st.divider()
-st.markdown("""
-<style>
-.footer {
-    font-size: 0.8rem;
-    color: #666;
-    text-align: center;
-    margin-top: 2rem;
-}
-</style>
-<div class="footer">
-    中文PDF条款合规性分析工具 | 基于Qwen大模型 | 优化中文文档处理
-</div>
-""", unsafe_allow_html=True)
+# 确保在会话初始化完成后再运行主程序
+if __name__ == "__main__":
+    main()
