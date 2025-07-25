@@ -6,19 +6,12 @@ import re
 import requests
 import jieba  # 用于中文分词，提高匹配精度
 
-# 确保在设置页面配置前不进行任何Streamlit操作
-# 移动页面配置到最前面（在任何其他Streamlit操作之前）
+# 设置页面标题和图标
 st.set_page_config(
     page_title="Qwen 中文PDF条款合规性分析工具",
     page_icon="📄",
     layout="wide"
 )
-
-# 初始化会话状态（关键修复）
-if 'initialized' not in st.session_state:
-    st.session_state.initialized = True
-    # 可以在这里初始化其他需要的会话状态变量
-    st.session_state.api_key = ""
 
 # 自定义CSS样式
 st.markdown("""
@@ -103,7 +96,7 @@ def extract_text_from_pdf(file):
         return ""
 
 def split_into_clauses(text):
-    """将文本分割为条款，增强中文条款识别"""
+    """将文本分割为条款，增强中文条款识别，并限制最大条款数量"""
     # 增强中文条款模式识别
     patterns = [
         # 中文条款常见格式
@@ -118,12 +111,15 @@ def split_into_clauses(text):
     for pattern in patterns:
         clauses = re.findall(pattern, text, re.DOTALL)
         if len(clauses) > 3:  # 确保找到足够多的条款
-            return [clause.strip() for clause in clauses if clause.strip()]
+            # 限制最大条款数量，避免UI渲染问题
+            limited_clauses = [clause.strip() for clause in clauses if clause.strip()][:80]
+            return limited_clauses
     
     # 按中文标点分割段落
     paragraphs = re.split(r'[。；！？]\s*', text)
     paragraphs = [p.strip() for p in paragraphs if p.strip() and len(p) > 10]  # 过滤过短内容
-    return paragraphs
+    # 限制最大条款数量
+    return paragraphs[:80]
 
 def chinese_text_similarity(text1, text2):
     """计算中文文本相似度，使用分词后匹配"""
@@ -139,7 +135,10 @@ def match_clauses(clauses1, clauses2):
     matched_pairs = []
     used_indices = set()
     
-    for i, clause1 in enumerate(clauses1):
+    # 限制匹配对数量，避免过多UI元素
+    max_matches = min(50, len(clauses1), len(clauses2))
+    
+    for i, clause1 in enumerate(clauses1[:max_matches]):
         best_match = None
         best_ratio = 0.25  # 降低中文匹配阈值
         best_j = -1
@@ -205,7 +204,7 @@ def analyze_standalone_clause_with_qwen(clause, doc_name, api_key):
     return call_qwen_api(prompt, api_key)
 
 def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
-    """显示合规性分析结果"""
+    """显示合规性分析结果，添加分页处理"""
     # 分割条款
     with st.spinner("正在分析中文条款结构..."):
         clauses1 = split_into_clauses(text1)
@@ -228,17 +227,40 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
     st.divider()
     st.subheader("📊 条款合规性详细分析（Qwen大模型）")
     
-    # 分析每个匹配对的合规性
-    for i, (clause1, clause2, ratio) in enumerate(matched_pairs):
-        st.markdown(f"### 匹配条款对 {i+1}（相似度: {ratio:.2%}）")
+    # 添加分页控制，避免一次性渲染过多元素
+    total_matches = len(matched_pairs)
+    items_per_page = 10  # 每页显示10对条款
+    total_pages = max(1, (total_matches + items_per_page - 1) // items_per_page)
+    
+    # 初始化会话状态中的页码
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = 1
+    
+    # 页码选择器
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.session_state.current_page = st.slider(
+            f"查看第 {st.session_state.current_page} 页，共 {total_pages} 页",
+            1, total_pages, st.session_state.current_page
+        )
+    
+    # 计算当前页显示的条款范围
+    start_idx = (st.session_state.current_page - 1) * items_per_page
+    end_idx = min(start_idx + items_per_page, total_matches)
+    current_pairs = matched_pairs[start_idx:end_idx]
+    
+    # 分析当前页的匹配对
+    for i, (clause1, clause2, ratio) in enumerate(current_pairs, start=start_idx + 1):
+        st.markdown(f"### 匹配条款对 {i}（相似度: {ratio:.2%}）")
         
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.markdown(f'<div class="clause-box"><strong>{filename1} 条款:</strong><br>{clause1}</div>', unsafe_allow_html=True)
-        with col_b:
-            st.markdown(f'<div class="clause-box"><strong>{filename2} 条款:</strong><br>{clause2}</div>', unsafe_allow_html=True)
+        # 使用expander折叠条款内容，减少UI元素数量
+        with st.expander(f"{filename1} 条款内容", expanded=False):
+            st.markdown(f'<div class="clause-box">{clause1}</div>', unsafe_allow_html=True)
         
-        with st.spinner("正在调用Qwen大模型进行中文合规性分析..."):
+        with st.expander(f"{filename2} 条款内容", expanded=False):
+            st.markdown(f'<div class="clause-box">{clause2}</div>', unsafe_allow_html=True)
+        
+        with st.spinner(f"正在分析条款对 {i}..."):
             analysis = analyze_compliance_with_qwen(clause1, clause2, filename1, filename2, api_key)
         
         if analysis:
@@ -246,45 +268,75 @@ def show_compliance_analysis(text1, text2, filename1, filename2, api_key):
         
         st.divider()
     
-    # 未匹配的条款分析
+    # 未匹配的条款分析 - 使用分页
     st.subheader("未匹配条款分析")
-    col1, col2 = st.columns(2)
     
-    with col1:
-        st.markdown(f"#### {filename1} 中独有的条款 ({len(unmatched1)})")
-        for i, clause in enumerate(unmatched1):
-            # 这里补充完整未匹配条款的分析代码
-            with st.spinner(f"正在分析{filename1}的独有条款 {i+1}..."):
-                analysis = analyze_standalone_clause_with_qwen(clause, filename1, api_key)
+    # 处理第一个文件的未匹配条款
+    st.markdown(f"#### {filename1} 中独有的条款 ({len(unmatched1)})")
+    if len(unmatched1) > 0:
+        # 分页处理未匹配条款
+        unmatched1_per_page = 5
+        unmatched1_pages = max(1, (len(unmatched1) + unmatched1_per_page - 1) // unmatched1_per_page)
+        
+        if 'unmatched1_page' not in st.session_state:
+            st.session_state.unmatched1_page = 1
             
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            if analysis:
-                st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
+        st.session_state.unmatched1_page = st.slider(
+            f"{filename1} 未匹配条款页码",
+            1, unmatched1_pages, st.session_state.unmatched1_page
+        )
+        
+        start = (st.session_state.unmatched1_page - 1) * unmatched1_per_page
+        end = min(start + unmatched1_per_page, len(unmatched1))
+        
+        for i, clause in enumerate(unmatched1[start:end], start=start + 1):
+            with st.expander(f"条款 {i}", expanded=False):
+                st.markdown(f'<div class="clause-box">{clause}</div>', unsafe_allow_html=True)
+                with st.spinner(f"正在分析条款 {i}..."):
+                    analysis = analyze_standalone_clause_with_qwen(clause, filename1, api_key)
+                if analysis:
+                    st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
     
-    with col2:
-        st.markdown(f"#### {filename2} 中独有的条款 ({len(unmatched2)})")
-        for i, clause in enumerate(unmatched2):
-            with st.spinner(f"正在分析{filename2}的独有条款 {i+1}..."):
-                analysis = analyze_standalone_clause_with_qwen(clause, filename2, api_key)
+    # 处理第二个文件的未匹配条款
+    st.markdown(f"#### {filename2} 中独有的条款 ({len(unmatched2)})")
+    if len(unmatched2) > 0:
+        # 分页处理未匹配条款
+        unmatched2_per_page = 5
+        unmatched2_pages = max(1, (len(unmatched2) + unmatched2_per_page - 1) // unmatched2_per_page)
+        
+        if 'unmatched2_page' not in st.session_state:
+            st.session_state.unmatched2_page = 1
             
-            st.markdown(f'<div class="clause-box"><strong>条款 {i+1}:</strong><br>{clause}</div>', unsafe_allow_html=True)
-            if analysis:
-                st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
+        st.session_state.unmatched2_page = st.slider(
+            f"{filename2} 未匹配条款页码",
+            1, unmatched2_pages, st.session_state.unmatched2_page
+        )
+        
+        start = (st.session_state.unmatched2_page - 1) * unmatched2_per_page
+        end = min(start + unmatched2_per_page, len(unmatched2))
+        
+        for i, clause in enumerate(unmatched2[start:end], start=start + 1):
+            with st.expander(f"条款 {i}", expanded=False):
+                st.markdown(f'<div class="clause-box">{clause}</div>', unsafe_allow_html=True)
+                with st.spinner(f"正在分析条款 {i}..."):
+                    analysis = analyze_standalone_clause_with_qwen(clause, filename2, api_key)
+                if analysis:
+                    st.markdown('<div class="model-response">' + analysis + '</div>', unsafe_allow_html=True)
 
-# 主程序入口（关键修复：确保所有Streamlit操作在主程序块中）
+# 添加主程序入口（原代码中缺少这部分）
 def main():
     st.title("Qwen 中文PDF条款合规性分析工具")
-    st.write("上传两个PDF文件，系统将自动分析条款合规性并使用Qwen大模型提供专业评估")
     
     # 侧边栏设置
     with st.sidebar:
-        st.subheader("设置")
-        st.session_state.api_key = st.text_input("Qwen API 密钥", type="password", value=st.session_state.api_key)
+        st.header("设置")
+        api_key = st.text_input("Qwen API 密钥", type="password")
         st.markdown("""
-        提示：获取API密钥请访问阿里云DashScope平台
+        请输入您的Qwen API密钥以使用本工具。
         """)
     
-    # 文件上传
+    # 上传文件
+    st.header("上传PDF文件")
     col1, col2 = st.columns(2)
     with col1:
         file1 = st.file_uploader("上传第一个PDF文件", type="pdf", key="file1")
@@ -292,16 +344,15 @@ def main():
         file2 = st.file_uploader("上传第二个PDF文件", type="pdf", key="file2")
     
     # 分析按钮
-    if st.button("开始合规性分析") and file1 and file2:
+    if st.button("开始合规性分析") and file1 and file2 and api_key:
         with st.spinner("正在提取PDF文本..."):
             text1 = extract_text_from_pdf(file1)
             text2 = extract_text_from_pdf(file2)
         
         if text1 and text2:
-            show_compliance_analysis(text1, text2, file1.name, file2.name, st.session_state.api_key)
+            show_compliance_analysis(text1, text2, file1.name, file2.name, api_key)
         else:
-            st.error("无法从PDF中提取文本，请检查文件是否有效")
+            st.error("无法从一个或多个PDF文件中提取文本，请检查文件是否有效。")
 
-# 确保在会话初始化完成后再运行主程序
 if __name__ == "__main__":
     main()
